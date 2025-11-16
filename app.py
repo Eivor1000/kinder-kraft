@@ -1,13 +1,12 @@
 """
-AI Story Generator with Multiple Model Support
-A Streamlit application for generating creative stories using MPT-7B-StoryWriter and GOAT-70B-Storytelling models.
+AI Story Generator with Multiple Model Support via HuggingFace Inference API
+A Streamlit application for generating creative stories using cloud-hosted models.
+No local downloads required - uses HuggingFace Inference API.
 """
 
 import streamlit as st
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from huggingface_hub import InferenceClient
 import time
-import psutil
 import os
 from datetime import datetime
 
@@ -25,211 +24,144 @@ st.set_page_config(
 MODEL_CONFIGS = {
     "MPT-7B-StoryWriter": {
         "name": "mosaicml/mpt-7b-storywriter",
-        "tokenizer": "EleutherAI/gpt-neox-20b",
         "max_context": 65536,
         "max_tokens_limit": 5000,
         "description": "Specialized for long-form creative writing with 65k token context window",
-        "best_for": "Continuing long stories, detailed world-building, extended narratives"
+        "best_for": "Continuing long stories, detailed world-building, extended narratives",
+        "default_max_tokens": 500
     },
     "GOAT-70B-Storytelling": {
         "name": "GOAT-AI/GOAT-70B-Storytelling",
-        "tokenizer": "GOAT-AI/GOAT-70B-Storytelling",
         "max_context": 4096,
         "max_tokens_limit": 2000,
         "description": "70B parameter model specialized for novel writing and character-driven stories",
-        "best_for": "Structured novel plots, character development, script writing"
+        "best_for": "Structured novel plots, character development, script writing",
+        "default_max_tokens": 400
     }
 }
 
 
-@st.cache_resource
-def load_mpt_model():
+def get_hf_token():
     """
-    Load the MPT-7B-StoryWriter model and tokenizer with caching.
-    Returns model, tokenizer, and device information.
+    Get HuggingFace API token from session state or environment variable.
+    """
+    # Check session state first
+    if 'hf_token' in st.session_state and st.session_state.hf_token:
+        return st.session_state.hf_token
+
+    # Check environment variable
+    token = os.getenv('HUGGINGFACE_TOKEN') or os.getenv('HF_TOKEN')
+    if token:
+        st.session_state.hf_token = token
+        return token
+
+    return None
+
+
+def initialize_client(model_name, api_token):
+    """
+    Initialize HuggingFace Inference Client for the selected model.
     """
     try:
-        # Check CUDA availability
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        # Determine dtype based on device
-        if device == "cuda":
-            dtype = torch.bfloat16
-        else:
-            dtype = torch.float32
-            st.warning("⚠️ CUDA not available. Running on CPU (will be slower).")
-
-        with st.spinner("Loading MPT-7B-StoryWriter model... This may take a few minutes."):
-            # Load tokenizer
-            tokenizer = AutoTokenizer.from_pretrained(
-                MODEL_CONFIGS["MPT-7B-StoryWriter"]["tokenizer"],
-                trust_remote_code=True
-            )
-
-            # Load model
-            model = AutoModelForCausalLM.from_pretrained(
-                MODEL_CONFIGS["MPT-7B-StoryWriter"]["name"],
-                trust_remote_code=True,
-                torch_dtype=dtype,
-                low_cpu_mem_usage=True
-            )
-
-            model.to(device)
-            model.eval()
-
-        return model, tokenizer, device
-
+        client = InferenceClient(model=model_name, token=api_token)
+        return client
     except Exception as e:
-        st.error(f"Error loading MPT model: {str(e)}")
-        st.info("This might be due to insufficient memory or network issues. Please try again.")
-        return None, None, None
+        st.error(f"Error initializing client: {str(e)}")
+        return None
 
 
-@st.cache_resource
-def load_goat_model():
+def count_tokens_estimate(text):
     """
-    Load the GOAT-70B-Storytelling model and tokenizer with caching.
-    Uses device_map="auto" to handle the large 70B model.
-    Returns model, tokenizer, and device information.
+    Estimate token count (roughly 4 characters per token).
+    This is an approximation since we don't have the tokenizer locally.
     """
-    try:
-        if not torch.cuda.is_available():
-            st.error("⚠️ GOAT-70B requires a GPU. CUDA is not available.")
-            st.info("Please use MPT-7B-StoryWriter model instead, or ensure CUDA is properly configured.")
-            return None, None, None
-
-        with st.spinner("Loading GOAT-70B-Storytelling model... This may take several minutes."):
-            # Load tokenizer
-            tokenizer = AutoTokenizer.from_pretrained(
-                MODEL_CONFIGS["GOAT-70B-Storytelling"]["tokenizer"],
-                trust_remote_code=True
-            )
-
-            # Load model with automatic device mapping for large models
-            model = AutoModelForCausalLM.from_pretrained(
-                MODEL_CONFIGS["GOAT-70B-Storytelling"]["name"],
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-                low_cpu_mem_usage=True,
-                trust_remote_code=True
-            )
-
-            model.eval()
-
-        return model, tokenizer, "auto"
-
-    except Exception as e:
-        st.error(f"Error loading GOAT model: {str(e)}")
-        if "out of memory" in str(e).lower():
-            st.error("⚠️ Out of memory error. GOAT-70B requires significant GPU memory (typically 80GB+).")
-            st.info("Try using MPT-7B-StoryWriter instead, which requires much less memory (~16GB).")
-        else:
-            st.info("This might be due to insufficient memory, network issues, or model availability. Please try again.")
-        return None, None, None
+    return len(text) // 4
 
 
-def count_tokens(text, tokenizer):
-    """Count the number of tokens in a text."""
-    return len(tokenizer.encode(text))
-
-
-def generate_story(model, tokenizer, device, prompt, max_tokens, temperature, top_p, top_k, model_type):
+def generate_story(client, model_name, prompt, max_tokens, temperature, top_p, top_k):
     """
-    Generate a story based on the given prompt and parameters.
-    Handles both MPT and GOAT models appropriately.
+    Generate a story using HuggingFace Inference API.
     """
     try:
-        # Tokenize input
-        inputs = tokenizer(prompt, return_tensors="pt")
+        # Estimate input tokens
+        input_token_estimate = count_tokens_estimate(prompt)
 
-        # Move to device only if not using auto device mapping
-        if device != "auto":
-            inputs = inputs.to(device)
-        else:
-            # For device_map="auto", move to model's first device
-            inputs = inputs.to(model.device)
+        # Check approximate context length limits
+        model_type = None
+        for key, config in MODEL_CONFIGS.items():
+            if config["name"] == model_name:
+                model_type = key
+                max_context = config["max_context"]
+                break
 
-        input_token_count = inputs.input_ids.shape[1]
-
-        # Check context length limits
-        max_context = MODEL_CONFIGS[model_type]["max_context"]
-        if input_token_count > max_context:
-            st.error(f"⚠️ Input prompt ({input_token_count} tokens) exceeds model's context limit ({max_context} tokens)")
+        if input_token_estimate > max_context:
+            st.error(f"⚠️ Input prompt (~{input_token_estimate} tokens) may exceed model's context limit ({max_context} tokens)")
             st.info("Please shorten your prompt and try again.")
             return None
 
         # Record start time
         start_time = time.time()
 
-        # Generate with model-specific parameters
-        generation_kwargs = {
+        # Prepare generation parameters
+        generation_params = {
             "max_new_tokens": max_tokens,
             "temperature": temperature,
             "top_p": top_p,
             "do_sample": True,
-            "pad_token_id": tokenizer.eos_token_id,
+            "return_full_text": True,
         }
 
         # Add top_k only if it's greater than 0
         if top_k > 0:
-            generation_kwargs["top_k"] = top_k
+            generation_params["top_k"] = top_k
 
         # Add repetition penalty (model-specific)
         if model_type == "MPT-7B-StoryWriter":
-            generation_kwargs["repetition_penalty"] = 1.1
+            generation_params["repetition_penalty"] = 1.1
         else:  # GOAT model
-            generation_kwargs["repetition_penalty"] = 1.15
+            generation_params["repetition_penalty"] = 1.15
 
-        # Generate
-        with torch.no_grad():
-            outputs = model.generate(
-                inputs.input_ids,
-                **generation_kwargs
-            )
-
-        # Decode output
-        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        # Generate using text_generation
+        response = client.text_generation(
+            prompt,
+            **generation_params
+        )
 
         # Calculate generation time
         generation_time = time.time() - start_time
 
-        # Count output tokens
-        output_token_count = outputs.shape[1]
+        # Estimate output tokens
+        output_token_estimate = count_tokens_estimate(response)
 
         # Calculate tokens per second
-        tokens_per_second = (output_token_count - input_token_count) / generation_time if generation_time > 0 else 0
+        tokens_generated = output_token_estimate - input_token_estimate
+        tokens_per_second = tokens_generated / generation_time if generation_time > 0 else 0
 
         return {
-            "text": generated_text,
-            "input_tokens": input_token_count,
-            "output_tokens": output_token_count,
+            "text": response,
+            "input_tokens": input_token_estimate,
+            "output_tokens": output_token_estimate,
             "generation_time": generation_time,
             "tokens_per_second": tokens_per_second
         }
 
-    except torch.cuda.OutOfMemoryError:
-        st.error("⚠️ GPU out of memory!")
-        st.info("Try reducing the max tokens parameter or using a smaller model.")
-        return None
     except Exception as e:
-        st.error(f"Error generating story: {str(e)}")
+        error_msg = str(e)
+
+        # Handle common API errors
+        if "authorization" in error_msg.lower() or "401" in error_msg:
+            st.error("⚠️ Authorization error. Please check your HuggingFace API token.")
+            st.info("Make sure your token has read access and is valid.")
+        elif "rate limit" in error_msg.lower() or "429" in error_msg:
+            st.error("⚠️ Rate limit exceeded. Please wait a moment and try again.")
+        elif "model is currently loading" in error_msg.lower():
+            st.warning("⚠️ Model is loading on HuggingFace servers. Please wait 30-60 seconds and try again.")
+        elif "timeout" in error_msg.lower():
+            st.error("⚠️ Request timeout. Try reducing max_tokens or try again.")
+        else:
+            st.error(f"Error generating story: {error_msg}")
+
         return None
-
-
-def get_memory_usage():
-    """Get current memory usage statistics."""
-    process = psutil.Process(os.getpid())
-    mem_info = process.memory_info()
-    return mem_info.rss / 1024 / 1024 / 1024  # Convert to GB
-
-
-def get_gpu_memory():
-    """Get GPU memory usage if available."""
-    if torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated() / 1024 / 1024 / 1024  # GB
-        reserved = torch.cuda.memory_reserved() / 1024 / 1024 / 1024  # GB
-        return allocated, reserved
-    return None, None
 
 
 def create_download_link(text, filename):
@@ -271,7 +203,7 @@ def display_model_comparison():
     | **Context Window** | 65,536 tokens | 4,096 tokens |
     | **Best For** | Long-form content, extended narratives | Structured plots, character development |
     | **Speed** | Faster | Slower |
-    | **Memory Required** | ~16GB GPU | ~80GB GPU |
+    | **Hosting** | HuggingFace Cloud | HuggingFace Cloud |
     | **Recommended Max Tokens** | 500-2000 | 300-1000 |
     | **Specialty** | Ultra-long context | Novel-quality prose |
     """)
@@ -281,8 +213,49 @@ def main():
     """Main application function."""
 
     # Header
-    st.title("📚 AI Story Generator - Multi-Model")
-    st.markdown("Generate creative stories using state-of-the-art language models")
+    st.title("📚 AI Story Generator - Cloud API")
+    st.markdown("Generate creative stories using HuggingFace Inference API - No downloads required!")
+
+    # API Token Input
+    st.sidebar.header("🔑 API Configuration")
+
+    # Check if token exists
+    existing_token = get_hf_token()
+
+    if existing_token:
+        st.sidebar.success("✅ API Token configured")
+        if st.sidebar.button("Change Token"):
+            st.session_state.hf_token = None
+            st.rerun()
+        api_token = existing_token
+    else:
+        st.sidebar.info("Enter your HuggingFace API token to get started")
+        api_token_input = st.sidebar.text_input(
+            "HuggingFace API Token:",
+            type="password",
+            help="Get your token at https://huggingface.co/settings/tokens"
+        )
+
+        if api_token_input:
+            st.session_state.hf_token = api_token_input
+            api_token = api_token_input
+            st.rerun()
+        else:
+            st.warning("⚠️ Please enter your HuggingFace API token in the sidebar to continue.")
+            st.info("""
+            **How to get your HuggingFace API token:**
+            1. Go to https://huggingface.co/settings/tokens
+            2. Click "New token"
+            3. Give it a name and select "read" permissions
+            4. Copy the token and paste it in the sidebar
+            """)
+
+            with st.expander("📊 Model Information"):
+                display_model_comparison()
+
+            return
+
+    st.sidebar.markdown("---")
 
     # Sidebar - Model Selection
     st.sidebar.header("🤖 Model Selection")
@@ -310,31 +283,23 @@ def main():
 
     st.sidebar.markdown("---")
 
-    # Load the selected model
-    if selected_model == "MPT-7B-StoryWriter":
-        model, tokenizer, device = load_mpt_model()
-    else:  # GOAT-70B-Storytelling
-        model, tokenizer, device = load_goat_model()
+    # Initialize client
+    model_name = model_config["name"]
+    client = initialize_client(model_name, api_token)
 
-    if model is None or tokenizer is None:
-        st.error("Failed to load model. Please try selecting a different model or refresh the page.")
-
-        # Show model comparison to help user choose alternative
-        with st.expander("📊 Compare Models"):
-            display_model_comparison()
-
+    if client is None:
+        st.error("Failed to initialize API client. Please check your token and try again.")
         return
 
-    # Display model info
-    device_display = device.upper() if device != "auto" else "AUTO (Multi-GPU)"
-    st.success(f"✅ {selected_model} loaded successfully on {device_display}")
+    # Display API status
+    st.success(f"✅ Connected to HuggingFace API - Using {selected_model}")
 
     # Sidebar - Generation Parameters
     st.sidebar.header("⚙️ Generation Parameters")
 
     # Dynamic max tokens based on selected model
     max_tokens_limit = model_config["max_tokens_limit"]
-    default_max_tokens = 500 if selected_model == "MPT-7B-StoryWriter" else 400
+    default_max_tokens = model_config["default_max_tokens"]
 
     max_tokens = st.sidebar.slider(
         "Max Tokens",
@@ -376,18 +341,6 @@ def main():
         help="Number of top tokens to consider. 0 = disabled"
     )
 
-    # Memory usage display
-    st.sidebar.markdown("---")
-    if st.sidebar.checkbox("Show Memory Usage"):
-        mem_usage = get_memory_usage()
-        st.sidebar.metric("System Memory", f"{mem_usage:.2f} GB")
-
-        gpu_allocated, gpu_reserved = get_gpu_memory()
-        if gpu_allocated is not None:
-            col1, col2 = st.sidebar.columns(2)
-            col1.metric("GPU Allocated", f"{gpu_allocated:.2f} GB")
-            col2.metric("GPU Reserved", f"{gpu_reserved:.2f} GB")
-
     # Model recommendations
     st.sidebar.markdown("---")
     with st.sidebar.expander("💡 Model Recommendations"):
@@ -398,7 +351,7 @@ def main():
             - Can maintain context over tens of thousands of words
             - Works well with detailed prompts
             - Faster generation speed
-            - Lower memory requirements
+            - Ideal for serialized fiction
             """)
         else:
             st.markdown("""
@@ -407,7 +360,6 @@ def main():
             - Excellent character development
             - Great for screenplay/script format
             - Better at following complex instructions
-            - Requires powerful GPU (80GB+ recommended)
             - Keep prompts focused and structured
             """)
 
@@ -442,18 +394,18 @@ def main():
         # Update session state and show token count
         if prompt:
             st.session_state.prompt = prompt
-            prompt_tokens = count_tokens(prompt, tokenizer)
+            prompt_tokens = count_tokens_estimate(prompt)
 
             # Color-code token count based on context limit
             max_context = model_config["max_context"]
             token_percentage = (prompt_tokens / max_context) * 100
 
             if token_percentage < 50:
-                st.caption(f"✅ Prompt tokens: {prompt_tokens} / {max_context:,} ({token_percentage:.1f}%)")
+                st.caption(f"✅ Estimated prompt tokens: ~{prompt_tokens} / {max_context:,} ({token_percentage:.1f}%)")
             elif token_percentage < 80:
-                st.caption(f"⚠️ Prompt tokens: {prompt_tokens} / {max_context:,} ({token_percentage:.1f}%)")
+                st.caption(f"⚠️ Estimated prompt tokens: ~{prompt_tokens} / {max_context:,} ({token_percentage:.1f}%)")
             else:
-                st.caption(f"🔴 Prompt tokens: {prompt_tokens} / {max_context:,} ({token_percentage:.1f}%)")
+                st.caption(f"🔴 Estimated prompt tokens: ~{prompt_tokens} / {max_context:,} ({token_percentage:.1f}%)")
                 st.warning("Prompt is very long. Consider shortening for better results.")
 
         # Action buttons
@@ -480,9 +432,8 @@ def main():
             else:
                 with st.spinner(f"Generating your story with {selected_model}... ✨"):
                     result = generate_story(
-                        model, tokenizer, device,
-                        prompt, max_tokens, temperature, top_p, top_k,
-                        selected_model
+                        client, model_name,
+                        prompt, max_tokens, temperature, top_p, top_k
                     )
 
                 if result:
@@ -504,16 +455,16 @@ def main():
             # Display metrics
             metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
             with metric_col1:
-                st.metric("Input Tokens", result["input_tokens"])
+                st.metric("Input Tokens", f"~{result['input_tokens']}")
             with metric_col2:
-                st.metric("Output Tokens", result["output_tokens"])
+                st.metric("Output Tokens", f"~{result['output_tokens']}")
             with metric_col3:
                 st.metric("Time", f"{result['generation_time']:.2f}s")
             with metric_col4:
-                st.metric("Speed", f"{result['tokens_per_second']:.1f} tok/s")
+                st.metric("Speed", f"~{result['tokens_per_second']:.1f} tok/s")
 
             # Show model used
-            st.caption(f"Generated with: **{result.get('model', 'Unknown')}**")
+            st.caption(f"Generated with: **{result.get('model', 'Unknown')}** via HuggingFace API")
 
             st.markdown("---")
 
@@ -529,9 +480,10 @@ def main():
 
             # Add metadata to download
             download_content = f"Generated with: {result.get('model', 'Unknown')}\n"
+            download_content += f"Via: HuggingFace Inference API\n"
             download_content += f"Timestamp: {result.get('timestamp', datetime.now())}\n"
             download_content += f"Generation time: {result['generation_time']:.2f}s\n"
-            download_content += f"Tokens: {result['input_tokens']} → {result['output_tokens']}\n"
+            download_content += f"Tokens (estimated): ~{result['input_tokens']} → ~{result['output_tokens']}\n"
             download_content += "\n" + "="*50 + "\n\n"
             download_content += result["text"]
 
@@ -545,13 +497,13 @@ def main():
             for idx, gen in enumerate(reversed(st.session_state.generation_history), 1):
                 st.markdown(f"**{idx}. {gen.get('model', 'Unknown')}** - "
                           f"{gen.get('timestamp', 'Unknown').strftime('%H:%M:%S')} - "
-                          f"{gen['output_tokens']} tokens in {gen['generation_time']:.1f}s")
+                          f"~{gen['output_tokens']} tokens in {gen['generation_time']:.1f}s")
 
     # Footer
     st.markdown("---")
     st.markdown(
         "<div style='text-align: center; color: gray;'>"
-        f"Powered by {selected_model} | Built with Streamlit"
+        f"Powered by {selected_model} via HuggingFace Inference API | Built with Streamlit"
         "</div>",
         unsafe_allow_html=True
     )
