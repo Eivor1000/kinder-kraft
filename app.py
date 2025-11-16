@@ -58,12 +58,12 @@ def get_hf_token():
     return None
 
 
-def initialize_client(model_name, api_token):
+def initialize_client(api_token):
     """
-    Initialize HuggingFace Inference Client for the selected model.
+    Initialize HuggingFace Inference Client.
     """
     try:
-        client = InferenceClient(model=model_name, token=api_token)
+        client = InferenceClient(token=api_token)
         return client
     except Exception as e:
         st.error(f"Error initializing client: {str(e)}")
@@ -78,7 +78,7 @@ def count_tokens_estimate(text):
     return len(text) // 4
 
 
-def generate_story(client, model_name, prompt, max_tokens, temperature, top_p, top_k):
+def generate_story(client, model_name, prompt, max_tokens, temperature, top_p, top_k, model_type):
     """
     Generate a story using HuggingFace Inference API.
     """
@@ -87,12 +87,7 @@ def generate_story(client, model_name, prompt, max_tokens, temperature, top_p, t
         input_token_estimate = count_tokens_estimate(prompt)
 
         # Check approximate context length limits
-        model_type = None
-        for key, config in MODEL_CONFIGS.items():
-            if config["name"] == model_name:
-                model_type = key
-                max_context = config["max_context"]
-                break
+        max_context = MODEL_CONFIGS[model_type]["max_context"]
 
         if input_token_estimate > max_context:
             st.error(f"⚠️ Input prompt (~{input_token_estimate} tokens) may exceed model's context limit ({max_context} tokens)")
@@ -102,13 +97,12 @@ def generate_story(client, model_name, prompt, max_tokens, temperature, top_p, t
         # Record start time
         start_time = time.time()
 
-        # Prepare generation parameters
+        # Prepare generation parameters - using correct API format
         generation_params = {
             "max_new_tokens": max_tokens,
             "temperature": temperature,
             "top_p": top_p,
             "do_sample": True,
-            "return_full_text": True,
         }
 
         # Add top_k only if it's greater than 0
@@ -121,9 +115,15 @@ def generate_story(client, model_name, prompt, max_tokens, temperature, top_p, t
         else:  # GOAT model
             generation_params["repetition_penalty"] = 1.15
 
+        # Show debug info
+        with st.expander("🔍 Debug Info (click to expand)"):
+            st.code(f"Model: {model_name}\nParameters: {generation_params}")
+
         # Generate using text_generation
+        # Note: Some models return just the new text, others return full text
         response = client.text_generation(
             prompt,
+            model=model_name,
             **generation_params
         )
 
@@ -148,18 +148,51 @@ def generate_story(client, model_name, prompt, max_tokens, temperature, top_p, t
     except Exception as e:
         error_msg = str(e)
 
-        # Handle common API errors
+        # Show full error for debugging
+        st.error(f"**Error generating story:**")
+        st.code(error_msg)
+
+        # Handle common API errors with helpful messages
         if "authorization" in error_msg.lower() or "401" in error_msg:
-            st.error("⚠️ Authorization error. Please check your HuggingFace API token.")
-            st.info("Make sure your token has read access and is valid.")
+            st.info("❌ **Authorization Error**\n\n"
+                   "Your HuggingFace API token may be invalid or expired.\n\n"
+                   "**Solutions:**\n"
+                   "- Check your token at https://huggingface.co/settings/tokens\n"
+                   "- Ensure it has 'read' permissions\n"
+                   "- Generate a new token if needed\n"
+                   "- Click 'Change Token' in the sidebar")
         elif "rate limit" in error_msg.lower() or "429" in error_msg:
-            st.error("⚠️ Rate limit exceeded. Please wait a moment and try again.")
-        elif "model is currently loading" in error_msg.lower():
-            st.warning("⚠️ Model is loading on HuggingFace servers. Please wait 30-60 seconds and try again.")
+            st.info("⏱️ **Rate Limit Exceeded**\n\n"
+                   "You've made too many requests.\n\n"
+                   "**Solutions:**\n"
+                   "- Wait 5-10 minutes before trying again\n"
+                   "- Reduce max_tokens to make shorter requests\n"
+                   "- Consider upgrading to HuggingFace Pro")
+        elif "model is currently loading" in error_msg.lower() or "loading" in error_msg.lower():
+            st.info("🔄 **Model is Loading**\n\n"
+                   "The model is warming up on HuggingFace servers.\n\n"
+                   "**Solution:**\n"
+                   "- Wait 30-60 seconds and try again\n"
+                   "- The next request will be faster")
         elif "timeout" in error_msg.lower():
-            st.error("⚠️ Request timeout. Try reducing max_tokens or try again.")
+            st.info("⏰ **Request Timeout**\n\n"
+                   "The request took too long.\n\n"
+                   "**Solutions:**\n"
+                   "- Reduce max_tokens parameter\n"
+                   "- Try again in a moment\n"
+                   "- Check your internet connection")
+        elif "not found" in error_msg.lower() or "404" in error_msg:
+            st.info("🔍 **Model Not Found**\n\n"
+                   "The model may not be available via Inference API.\n\n"
+                   "**Note:** Some models are not available through the free Inference API.\n"
+                   "Try the other model or check HuggingFace model page.")
         else:
-            st.error(f"Error generating story: {error_msg}")
+            st.info("💡 **Troubleshooting Tips:**\n\n"
+                   "1. Check your internet connection\n"
+                   "2. Try reducing max_tokens\n"
+                   "3. Try the other model\n"
+                   "4. Wait a moment and try again\n"
+                   "5. Check HuggingFace status: https://status.huggingface.co")
 
         return None
 
@@ -248,6 +281,8 @@ def main():
             2. Click "New token"
             3. Give it a name and select "read" permissions
             4. Copy the token and paste it in the sidebar
+
+            **Note:** The token is free and only takes a minute to create!
             """)
 
             with st.expander("📊 Model Information"):
@@ -285,7 +320,7 @@ def main():
 
     # Initialize client
     model_name = model_config["name"]
-    client = initialize_client(model_name, api_token)
+    client = initialize_client(api_token)
 
     if client is None:
         st.error("Failed to initialize API client. Please check your token and try again.")
@@ -433,7 +468,8 @@ def main():
                 with st.spinner(f"Generating your story with {selected_model}... ✨"):
                     result = generate_story(
                         client, model_name,
-                        prompt, max_tokens, temperature, top_p, top_k
+                        prompt, max_tokens, temperature, top_p, top_k,
+                        selected_model
                     )
 
                 if result:
