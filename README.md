@@ -1,24 +1,55 @@
-# AI Story Generator - MPT-7B-StoryWriter
+# AI Story Generator - Multi-Model Support
 
-A powerful Streamlit application for generating creative stories using the MPT-7B-StoryWriter-65k+ model from MosaicML.
+A powerful Streamlit application for generating creative stories using state-of-the-art language models. Choose between MPT-7B-StoryWriter for long-form narratives or GOAT-70B-Storytelling for novel-quality prose.
 
 ## Features
 
-- **Advanced Story Generation**: Leverages the MPT-7B-StoryWriter model capable of handling up to 65,000 tokens
+### Multi-Model Support
+- **MPT-7B-StoryWriter**: 65k token context window, perfect for ultra-long stories
+- **GOAT-70B-Storytelling**: 70B parameters, specialized for novel writing and character development
+- Easy model switching with one click
+- Model comparison table to help choose the right model
+- Model-specific example prompts and recommendations
+
+### Core Features
 - **Customizable Parameters**: Fine-tune generation with temperature, top-p, top-k, and max tokens controls
-- **Example Prompts**: Quick-start with pre-made prompts across various genres
-- **Token Tracking**: Monitor input and output token counts
-- **Performance Metrics**: View generation time and optional memory usage
-- **Export Stories**: Download generated stories as .txt files
-- **GPU Support**: Automatic detection and use of CUDA-enabled GPUs for faster generation
+- **Dynamic UI**: Interface adapts based on selected model
+- **Token Tracking**: Monitor input and output token counts with context usage indicators
+- **Performance Metrics**: View generation time, tokens per second, and memory usage
+- **Export Stories**: Download generated stories as .txt files with metadata
+- **Generation History**: Track multiple generations in a session
+- **GPU Support**: Automatic detection and use of CUDA-enabled GPUs
+- **Smart Device Mapping**: Automatic multi-GPU support for large models
 - **User-Friendly Interface**: Clean, intuitive UI built with Streamlit
+
+## Model Comparison
+
+| Feature | MPT-7B-StoryWriter | GOAT-70B-Storytelling |
+|---------|-------------------|----------------------|
+| **Parameters** | 7 Billion | 70 Billion |
+| **Context Window** | 65,536 tokens | 4,096 tokens |
+| **Best For** | Long-form content, extended narratives | Structured plots, character development |
+| **Speed** | Faster | Slower |
+| **Memory Required** | ~16GB GPU | ~80GB GPU |
+| **Recommended Max Tokens** | 500-2000 | 300-1000 |
+| **Specialty** | Ultra-long context | Novel-quality prose |
 
 ## Requirements
 
+### Minimum Requirements
 - Python 3.8 or higher
-- CUDA-compatible GPU (recommended but not required)
-- Minimum 16GB RAM (32GB recommended for better performance)
-- ~15GB disk space for model download
+- 16GB RAM (for MPT model)
+- ~15GB disk space for model downloads
+
+### Recommended for GOAT-70B
+- Python 3.10 or higher
+- CUDA-compatible GPU with 80GB+ VRAM (A100, H100)
+- 32GB+ System RAM
+- ~140GB disk space
+
+### Recommended for MPT-7B
+- CUDA-compatible GPU with 16GB+ VRAM
+- 32GB System RAM
 
 ## Installation
 
@@ -48,7 +79,9 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-**Note**: The first time you run the app, it will download the model (~15GB), which may take some time depending on your internet connection.
+**Note**: The first time you select a model, it will be downloaded automatically. Download sizes:
+- MPT-7B-StoryWriter: ~15GB
+- GOAT-70B-Storytelling: ~140GB
 
 ## Usage
 
@@ -62,76 +95,115 @@ The application will open in your default web browser at `http://localhost:8501`
 
 ### Using the App
 
-1. **Enter a Story Prompt**: Type your story idea or click on example prompts
-2. **Adjust Parameters** (optional):
-   - **Max Tokens**: Control the length of the generated story (100-2000)
+1. **Select a Model**: Choose between MPT-7B-StoryWriter or GOAT-70B-Storytelling from the sidebar
+2. **Review Model Info**: Check the model description, context window, and recommendations
+3. **Enter a Story Prompt**: Type your story idea or click on model-specific example prompts
+4. **Adjust Parameters**:
+   - **Max Tokens**: Control the length (dynamically adjusted per model)
    - **Temperature**: Adjust creativity (0.1 = focused, 2.0 = very creative)
    - **Top-p**: Control diversity via nucleus sampling (0.1-1.0)
    - **Top-k**: Limit vocabulary per step (0-100, 0 = disabled)
-3. **Generate Story**: Click the "Generate Story" button
-4. **Review & Download**: Read your generated story and download it if desired
-5. **Clear**: Reset the interface to start fresh
+5. **Generate Story**: Click the "Generate Story" button
+6. **Review Metrics**: Check generation time, token count, and speed
+7. **Download**: Export your story with metadata as a .txt file
+8. **View History**: See all stories generated in the current session
 
-### Example Prompts
+### Model-Specific Example Prompts
 
-The app includes built-in example prompts for:
-- Fantasy Adventure
-- Sci-Fi Mystery
-- Historical Fiction
-- Contemporary Drama
-- Horror Thriller
+**MPT-7B-StoryWriter** (Long-form content):
+- Epic Fantasy Continuation
+- Sci-Fi Space Opera
+- Historical Epic
+- Mystery Noir
+
+**GOAT-70B-Storytelling** (Structured narratives):
+- Character-Driven Drama
+- Romance Novel Opening
+- Psychological Thriller
+- Coming-of-Age Story
+- Script Format Scenes
 
 ## Configuration
 
 ### GPU vs CPU
 
 The app automatically detects CUDA availability:
-- **With GPU**: Uses bfloat16 precision for optimal performance
-- **Without GPU**: Falls back to CPU with float32 precision (slower but functional)
+- **MPT Model with GPU**: Uses bfloat16 precision
+- **MPT Model without GPU**: Falls back to CPU with float32 (slower but functional)
+- **GOAT Model**: Requires GPU (will show error without CUDA)
+
+### Device Mapping
+
+For the GOAT-70B model, the app uses `device_map="auto"` which:
+- Automatically distributes the model across available GPUs
+- Optimizes memory usage
+- Handles models larger than single GPU memory
 
 ### Memory Optimization
 
 If you encounter out-of-memory errors:
-- Reduce `max_tokens` parameter
-- Close other memory-intensive applications
-- Consider using a machine with more RAM
-- Use GPU if available
+- **For MPT-7B**: Reduce max_tokens, use CPU, or close other applications
+- **For GOAT-70B**: Requires high-end GPU (80GB+), consider using MPT instead
+- Enable "Show Memory Usage" to monitor RAM and GPU usage
 
 ## Technical Details
 
-### Model Information
+### MPT-7B-StoryWriter
 
 - **Model**: [mosaicml/mpt-7b-storywriter](https://huggingface.co/mosaicml/mpt-7b-storywriter)
 - **Tokenizer**: [EleutherAI/gpt-neox-20b](https://huggingface.co/EleutherAI/gpt-neox-20b)
-- **Context Length**: Up to 65,000 tokens
+- **Context Length**: Up to 65,536 tokens
 - **Parameters**: 7 billion
+- **Precision**: bfloat16 (GPU) or float32 (CPU)
+- **Special Features**: FlashAttention support, ultra-long context
+
+### GOAT-70B-Storytelling
+
+- **Model**: [GOAT-AI/GOAT-70B-Storytelling](https://huggingface.co/GOAT-AI/GOAT-70B-Storytelling)
+- **Tokenizer**: Built-in tokenizer
+- **Context Length**: 4,096 tokens
+- **Parameters**: 70 billion
+- **Precision**: bfloat16
+- **Special Features**: Novel-quality prose, character development
 
 ### Key Features in Code
 
-- **Model Caching**: `@st.cache_resource` decorator ensures model loads only once
-- **Error Handling**: Comprehensive try-except blocks for robust operation
-- **Session State**: Maintains state across interactions
-- **Responsive UI**: Two-column layout for optimal user experience
+- **Separate Model Loaders**: `load_mpt_model()` and `load_goat_model()` with `@st.cache_resource`
+- **Unified Generation**: Single `generate_story()` function handles both models
+- **Dynamic UI**: Parameters adjust automatically based on selected model
+- **Error Handling**: Specific error messages for OOM, missing CUDA, etc.
+- **Session State**: Maintains prompts, stories, and generation history
+- **Model-Specific Prompts**: Different example prompts tailored to each model's strengths
 
 ## Troubleshooting
 
-### Model fails to load
+### Model Selection Issues
+
+**Issue**: GOAT model won't load
+**Solution**:
+- Verify CUDA is available: `torch.cuda.is_available()`
+- Check GPU memory: Need 80GB+ for GOAT-70B
+- Try MPT-7B-StoryWriter instead (much lower requirements)
+
+### CUDA Out of Memory
 
 **Issue**: `RuntimeError: CUDA out of memory`
 **Solution**:
-- Ensure you have enough GPU memory (minimum 16GB recommended)
+- **MPT Model**: Try reducing max_tokens or switching to CPU
+- **GOAT Model**: Requires high-end GPU (A100 80GB or H100)
 - Close other GPU-intensive applications
-- Try running on CPU (automatic fallback)
+- Use the "Show Memory Usage" feature to monitor usage
 
-### Slow generation on CPU
+### Slow Generation
 
 **Issue**: Story generation takes a long time
 **Solution**:
-- This is expected on CPU; consider using a GPU
-- Reduce `max_tokens` parameter for faster results
-- The model is 7B parameters and optimized for GPU use
+- **MPT on CPU**: Expected; consider using GPU or reduce max_tokens
+- **GOAT Model**: Expected due to 70B parameters; use 300-1000 max tokens
+- Check tokens/second metric to see actual speed
+- Ensure GPU is being used (check success message)
 
-### Import errors
+### Import Errors
 
 **Issue**: `ModuleNotFoundError`
 **Solution**:
@@ -139,32 +211,72 @@ If you encounter out-of-memory errors:
 pip install --upgrade -r requirements.txt
 ```
 
-### Model download issues
+### Model Download Issues
 
 **Issue**: Download interrupted or fails
 **Solution**:
-- Check internet connection
-- Ensure sufficient disk space (~15GB)
-- Try clearing HuggingFace cache: `~/.cache/huggingface/`
+- Check internet connection and disk space
+- For GOAT: Ensure you have ~140GB free
+- Clear HuggingFace cache if needed: `rm -rf ~/.cache/huggingface/`
+- Download may take hours for GOAT-70B
+
+### Context Length Exceeded
+
+**Issue**: Prompt too long for model
+**Solution**:
+- Check the token counter below your prompt
+- MPT supports up to 65k tokens
+- GOAT supports up to 4k tokens
+- Shorten your prompt if it exceeds the limit
 
 ## Performance Tips
 
-1. **Use GPU**: Significantly faster generation (10-50x speedup)
-2. **Start Small**: Begin with lower max_tokens to test performance
-3. **Optimize Parameters**:
-   - Temperature 0.7-0.9 for balanced creativity
-   - Top-p 0.9-0.95 for good quality
-   - Top-k 40-60 for diverse vocabulary
-4. **Batch Operations**: Generate multiple stories in one session to leverage cached model
+### General Tips
+1. **Choose the Right Model**:
+   - Use MPT for very long stories and extended narratives
+   - Use GOAT for high-quality, structured prose and character work
+2. **Monitor Performance**: Enable "Show Memory Usage" to track resources
+3. **Use Generation History**: Review previous outputs to refine prompts
+
+### MPT-7B Optimization
+- Excellent for continuing existing long stories
+- Can handle detailed, lengthy prompts
+- Faster generation than GOAT
+- Works on CPU if needed (though slower)
+- Temperature 0.7-0.9 recommended
+
+### GOAT-70B Optimization
+- Keep prompts focused and structured
+- Use 300-1000 max tokens for best performance
+- Excellent for novel chapters and character development
+- Best with screenplay/script format instructions
+- Temperature 0.8-1.0 for creative prose
 
 ## File Structure
 
 ```
 kinder-kraft/
-├── app.py              # Main Streamlit application
+├── app.py              # Main Streamlit application with multi-model support
 ├── requirements.txt    # Python dependencies
+├── .gitignore         # Git ignore patterns
 └── README.md          # This file
 ```
+
+## Use Cases
+
+### When to Use MPT-7B-StoryWriter
+- Continuing long-running stories
+- Generating extensive world-building content
+- Creating detailed backstories
+- Writing serialized fiction
+- Any task requiring very long context
+
+### When to Use GOAT-70B-Storytelling
+- Writing novel chapters
+- Developing complex characters
+- Creating screenplay scenes
+- Structured storytelling with specific arcs
+- High-quality literary prose
 
 ## Contributing
 
@@ -172,11 +284,14 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project uses the MPT-7B-StoryWriter model which is subject to its own license terms. Please review the [model card](https://huggingface.co/mosaicml/mpt-7b-storywriter) for details.
+This project uses models with their own license terms:
+- [MPT-7B-StoryWriter License](https://huggingface.co/mosaicml/mpt-7b-storywriter)
+- [GOAT-70B-Storytelling License](https://huggingface.co/GOAT-AI/GOAT-70B-Storytelling)
 
 ## Acknowledgments
 
 - [MosaicML](https://www.mosaicml.com/) for the MPT-7B-StoryWriter model
+- [GOAT-AI](https://huggingface.co/GOAT-AI) for the GOAT-70B-Storytelling model
 - [EleutherAI](https://www.eleuther.ai/) for the GPT-NeoX tokenizer
 - [Streamlit](https://streamlit.io/) for the web framework
 - [HuggingFace](https://huggingface.co/) for the Transformers library
@@ -184,6 +299,26 @@ This project uses the MPT-7B-StoryWriter model which is subject to its own licen
 ## Support
 
 For issues, questions, or suggestions, please open an issue in the repository.
+
+## Changelog
+
+### Version 2.0 - Multi-Model Support
+- Added GOAT-70B-Storytelling model
+- Model selection interface in sidebar
+- Model-specific example prompts
+- Dynamic parameter adjustment based on model
+- Model comparison table
+- Generation history tracking
+- Enhanced performance metrics (tokens/second)
+- GPU memory monitoring
+- Improved error handling with model-specific messages
+
+### Version 1.0 - Initial Release
+- MPT-7B-StoryWriter support
+- Basic story generation
+- Parameter customization
+- Token tracking
+- Export functionality
 
 ---
 
